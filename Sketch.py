@@ -498,7 +498,11 @@ class Sketch(CanvasBase):
 
             return points
         # Texture coordinates mapping from triangle bounding box to texture
+        # Flat shading uses the color of the first vertex
+        flat_color = p1.color
 
+        
+        
         # Sort the vertices by y-coordinate ascending (p0.y <= p1.y <= p2.y)
         vertices = sorted([p1, p2, p3], key=lambda p: p.coords[1])
         p0, p1, p2 = vertices
@@ -506,7 +510,6 @@ class Sketch(CanvasBase):
         x1, y1 = p1.coords
         x2, y2 = p2.coords
 
-        
         # Use Bresenham's algorithm to generate the edge points
         # Generate edge lists
         edge0 = bresenham_line_points(p0, p1, doSmooth)
@@ -528,8 +531,6 @@ class Sketch(CanvasBase):
         # Get all y values
         y_values = sorted(y_dict.keys())
 
-        # Flat shading uses the color of the first vertex
-        flat_color = p0.color
 
         # Fill the triangle by drawing horizontal lines between edge points
         for y in y_values:
@@ -538,47 +539,30 @@ class Sketch(CanvasBase):
             x_min = int(min(x_coords))
             x_max = int(max(x_coords))
 
-            # Handle color interpolation if doSmooth is True
-            if doSmooth or doTexture or doAA:
+            # Modify the condition to exclude doAA from affecting flat shading
+            if doSmooth or doTexture:
                 # For each pixel between x_min and x_max
                 for x in range(x_min, x_max + 1):
                     # Calculate barycentric weights (without using barycentric coordinates explicitly)
-                    w0 = ((x1 - x2) * (y - y2) - (x - x2) * (y1 - y2)) / \
-                        ((x1 - x2) * (y0 - y2) - (x0 - x2) * (y1 - y2))
-                    w1 = ((x2 - x0) * (y - y2) - (x - x2) * (y2 - y0)) / \
-                        ((x1 - x2) * (y0 - y2) - (x0 - x2) * (y1 - y2))
+                    denom = ((x1 - x2) * (y0 - y2) - (x0 - x2) * (y1 - y2))
+                    if denom == 0:
+                        # Avoid division by zero; skip this pixel
+                        continue
+                    w0 = ((x1 - x2) * (y - y2) - (x - x2) * (y1 - y2)) / denom
+                    w1 = ((x2 - x0) * (y - y2) - (x - x2) * (y2 - y0)) / denom
                     w2 = 1 - w0 - w1
 
                     # Clamp weights
                     w0 = max(0, min(w0, 1))
                     w1 = max(0, min(w1, 1))
                     w2 = max(0, min(w2, 1))
-                    if doAA:
-                        # Anti-aliasing using supersampling
-                        # Compute edge equations for the triangle
-                        min_x = int(min(x0, x1, x2))
-                        max_x = int(max(x0, x1, x2)) + 1
-                        min_y = int(min(y0, y1, y2))
-                        max_y = int(max(y0, y1, y2)) + 1
-                        def edge_function(v0, v1, p):
-                            return (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
-
-                        # Precompute edge constants
-                        area = edge_function(p0.coords, p1.coords, p2.coords)
-                        w0_norm = w0 / area
-                        w1_norm = w1 / area
-                        w2_norm = w2 / area
-
-                        r = w0_norm * p0.color.r + w1_norm * p1.color.r + w2_norm * p2.color.r
-                        g = w0_norm * p0.color.g + w1_norm * p1.color.g + w2_norm * p2.color.g
-                        b = w0_norm * p0.color.b + w1_norm * p1.color.b + w2_norm * p2.color.b
-                        
+                    
                     if doTexture:
                         # Get bounding box of the triangle
-                        min_x = max(min(p0.coords[0], p1.coords[0], p2.coords[0]), 0)
-                        max_x = min(max(p0.coords[0], p1.coords[0], p2.coords[0]), buff.width - 1)
-                        min_y = max(min(p0.coords[1], p1.coords[1], p2.coords[1]), 0)
-                        max_y = min(max(p0.coords[1], p1.coords[1], p2.coords[1]), buff.height - 1)
+                        min_x = max(int(min(x0, x1, x2)), 0)
+                        max_x = min(int(max(x0, x1, x2)), buff.width - 1)
+                        min_y = max(int(min(y0, y1, y2)), 0)
+                        max_y = min(int(max(y0, y1, y2)), buff.height - 1)
 
                         # Texture size
                         tex_width = self.texture.width - 1
@@ -601,8 +585,8 @@ class Sketch(CanvasBase):
                             v = (y - tri_min_y) / tri_height
                             u = max(0, min(u, 1))  # Clamp u to [0,1]
                             v = max(0, min(v, 1))  # Clamp v to [0,1]
-                            tex_x = int(u * tex_width)  # Changed from u * tex_width to prevent out-of-bounds
-                            tex_y = int(v * tex_height)  # Changed from v * tex_height to prevent out-of-bounds
+                            tex_x = int(u * tex_width)
+                            tex_y = int(v * tex_height)
                             # Ensure tex_x and tex_y are within valid range
                             tex_x = min(tex_x, tex_width)
                             tex_y = min(tex_y, tex_height)
@@ -611,11 +595,31 @@ class Sketch(CanvasBase):
                         # Texture mapping (if applicable)
                         color = get_texture_color(x, y)
                     else:
-                        # Interpolate color
-                        r = w0 * p0.color.r + w1 * p1.color.r + w2 * p2.color.r
-                        g = w0 * p0.color.g + w1 * p1.color.g + w2 * p2.color.g
-                        b = w0 * p0.color.b + w1 * p1.color.b + w2 * p2.color.b
-                        color = ColorType(r, g, b)
+                        if doSmooth:
+                            # Interpolate color
+                            r = w0 * p0.color.r + w1 * p1.color.r + w2 * p2.color.r
+                            g = w0 * p0.color.g + w1 * p1.color.g + w2 * p2.color.g
+                            b = w0 * p0.color.b + w1 * p1.color.b + w2 * p2.color.b
+                            color = ColorType(r, g, b)
+                        else:
+                            # Flat shading: use the first vertex's color
+                            color = flat_color
+
+                    # Apply anti-aliasing if enabled and smooth shading is not used
+                    if doAA and not doSmooth:
+                        # Implement simple anti-aliasing by blending the color with the background
+                        # For simplicity, assume background color is black
+                        # A more sophisticated approach would use supersampling
+                        existing_point = buff.getPoint(x, y)
+                        if existing_point:
+                            alpha = 0.5  # Example alpha value for blending
+                            color = ColorType(
+                                r=(1 - alpha) * existing_point.color.r + alpha * color.r,
+                                g=(1 - alpha) * existing_point.color.g + alpha * color.g,
+                                b=(1 - alpha) * existing_point.color.b + alpha * color.b
+                            )
+
+                    # Clamp color values to [0, 1]
                     clamped_color = ColorType(
                         r=min(1.0, max(0.0, color.r)),  
                         g=min(1.0, max(0.0, color.g)),  
@@ -624,7 +628,7 @@ class Sketch(CanvasBase):
                     # Draw the pixel
                     self.drawPoint(buff, Point((x, y), clamped_color))
             else:
-                # Flat shading
+                # Flat shading: fill with the first vertex's color
                 for x in range(x_min, x_max + 1):
                     self.drawPoint(buff, Point((x, y), flat_color))
         return
